@@ -324,7 +324,10 @@ fn parse_remote(source: &str) -> Result<RemoteSpec> {
     }
 
     if !source.contains("://") && !source.contains('@') {
-        let candidate = source.strip_prefix("github.com/").unwrap_or(source);
+        let candidate = source
+            .strip_prefix("github.com/")
+            .unwrap_or(source)
+            .trim_end_matches('/');
         if candidate.split('/').count() == 2 {
             let slug = normalize_slug(candidate)?;
             return Ok(RemoteSpec {
@@ -1156,6 +1159,9 @@ mod tests {
         let root = parse_remote("https://github.com/acme/widgets.git").unwrap();
         assert_eq!(root.github_slug.as_deref(), Some("acme/widgets"));
         assert!(root.url_tail.is_empty());
+
+        let shorthand = parse_remote("acme/widgets/").unwrap();
+        assert_eq!(shorthand.github_slug.as_deref(), Some("acme/widgets"));
 
         let tree =
             parse_remote("https://github.com/acme/widgets/tree/feature/api/src/lib").unwrap();
