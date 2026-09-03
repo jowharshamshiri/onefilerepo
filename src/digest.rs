@@ -102,7 +102,9 @@ impl Digest {
             .write_all(b"\n")
             .context("failed to write digest separator")?;
         for file in &self.scan.files {
-            write_file(writer, file)?;
+            write_file(writer, file).with_context(|| {
+                format!("failed to write digest record for {}", file.relative_path)
+            })?;
         }
         Ok(())
     }

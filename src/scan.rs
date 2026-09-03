@@ -194,12 +194,20 @@ pub fn scan(config: &ScanConfig) -> Result<ScanResult> {
             .to_owned(),
         None => "root".to_owned(),
     };
+    let root_is_file = root_metadata.is_file() || root_metadata.file_type().is_symlink();
+    let matcher_root = if root_is_file {
+        config
+            .root
+            .parent()
+            .context("single-file scan root has no parent directory")?
+    } else {
+        &config.root
+    };
     let output_path = normalized_output_path(config.output_path.as_deref())?;
-    let defaults = build_ignore(&config.root, DEFAULT_IGNORES)?;
-    let excludes = build_ignore(&config.root, &config.exclude_patterns)?;
+    let defaults = build_ignore(matcher_root, DEFAULT_IGNORES)?;
+    let excludes = build_ignore(matcher_root, &config.exclude_patterns)?;
     let includes = build_includes(&config.include_patterns)?;
 
-    let root_is_file = root_metadata.is_file() || root_metadata.file_type().is_symlink();
     let (mut candidates, mut stats) = if root_is_file {
         collect_single_file(
             config,

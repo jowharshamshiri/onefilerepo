@@ -439,17 +439,23 @@ struct ResolvedRevision {
 
 fn resolve_revision(repository: &Path, requested: Option<&str>) -> Result<ResolvedRevision> {
     if let Some(requested) = requested {
-        if let Some(commit) = try_resolve_commit(repository, requested)? {
-            return Ok(ResolvedRevision {
-                checkout: commit,
-                display: Some(requested.to_owned()),
-            });
-        }
-        if let Some(commit) = try_resolve_commit(repository, &format!("origin/{requested}"))? {
-            return Ok(ResolvedRevision {
-                checkout: commit,
-                display: Some(requested.to_owned()),
-            });
+        let candidates = if requested.starts_with("refs/") {
+            vec![requested.to_owned()]
+        } else {
+            vec![
+                format!("refs/heads/{requested}"),
+                format!("refs/remotes/origin/{requested}"),
+                format!("refs/tags/{requested}"),
+                requested.to_owned(),
+            ]
+        };
+        for candidate in candidates {
+            if let Some(commit) = try_resolve_commit(repository, &candidate)? {
+                return Ok(ResolvedRevision {
+                    checkout: commit,
+                    display: Some(requested.to_owned()),
+                });
+            }
         }
         if looks_like_commit(requested) {
             git_status(
@@ -917,6 +923,20 @@ fn looks_like_commit(value: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn test_git<I, S>(repository: &Path, arguments: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(arguments)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
     #[test]
     fn parses_repository_and_tree_urls_without_guessing_the_ref() {
         let root = parse_remote("https://github.com/acme/widgets.git").unwrap();
@@ -945,5 +965,32 @@ mod tests {
         assert!(looks_like_commit("deadbee"));
         assert!(!looks_like_commit("release-2026"));
         assert!(!looks_like_commit("abc"));
+    }
+
+    #[test]
+    fn branch_names_take_precedence_over_colliding_tag_names() {
+        let repository = tempfile::tempdir().unwrap();
+        test_git(repository.path(), ["init", "-b", "main"]);
+        test_git(repository.path(), ["config", "user.name", "Test Author"]);
+        test_git(
+            repository.path(),
+            ["config", "user.email", "test@example.invalid"],
+        );
+        fs::write(repository.path().join("value.txt"), "tag\n").unwrap();
+        test_git(repository.path(), ["add", "."]);
+        test_git(repository.path(), ["commit", "-m", "tag target"]);
+        test_git(repository.path(), ["tag", "release"]);
+        test_git(repository.path(), ["switch", "-c", "release"]);
+        fs::write(repository.path().join("value.txt"), "branch\n").unwrap();
+        test_git(repository.path(), ["commit", "-am", "branch target"]);
+
+        let branch_commit =
+            git_capture(repository.path(), ["rev-parse", "refs/heads/release"]).unwrap();
+        let tag_commit =
+            git_capture(repository.path(), ["rev-parse", "refs/tags/release"]).unwrap();
+        let resolved = resolve_revision(repository.path(), Some("release")).unwrap();
+
+        assert_ne!(branch_commit, tag_commit);
+        assert_eq!(resolved.checkout, branch_commit);
     }
 }
