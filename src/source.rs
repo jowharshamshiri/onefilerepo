@@ -233,13 +233,14 @@ fn prepare_remote(spec: RemoteSpec, options: &PrepareOptions) -> Result<Prepared
     }
     let selected_subpath = requested_subpath.filter(|path| !selects_root(path));
     if let Some(path) = selected_subpath.as_deref() {
-        let enters_submodule = configure_sparse_checkout(&clone_root, &revision.checkout, path)?;
+        let enters_submodule =
+            configure_sparse_checkout(&clone_root, &revision.checkout, path, github_auth)?;
         ensure!(
             options.include_submodules || !enters_submodule,
             "selected path is a Git submodule; remove --no-submodules or select a path outside it"
         );
     }
-    git_status(
+    git_status_with_auth(
         &clone_root,
         [
             OsStr::new("checkout"),
@@ -249,6 +250,7 @@ fn prepare_remote(spec: RemoteSpec, options: &PrepareOptions) -> Result<Prepared
             OsStr::new("--"),
         ],
         "check out the requested revision",
+        github_auth,
     )?;
 
     let mut submodule_count = 0;
@@ -582,39 +584,37 @@ fn resolve_url_tail(
     )
 }
 
-fn configure_sparse_checkout(repository: &Path, revision: &str, subpath: &Path) -> Result<bool> {
+fn configure_sparse_checkout(
+    repository: &Path,
+    revision: &str,
+    subpath: &Path,
+    github_auth: bool,
+) -> Result<bool> {
     let slash_path = path_to_slash_string(subpath)?;
     let mut selector = PathBuf::new();
-    let mut found = false;
     let mut enters_submodule = false;
     let parts = slash_path.split('/').collect::<Vec<_>>();
     for (index, part) in parts.iter().enumerate() {
         selector.push(part);
         let object = format!("{revision}:{}", path_to_slash_string(&selector)?);
-        if let Some(kind) = git_capture_optional(repository, ["cat-file", "-t", &object], &[128])? {
-            match kind.as_str() {
-                "commit" | "tree" => {
-                    found = true;
-                    enters_submodule = kind == "commit";
-                    if kind == "commit" || index + 1 == parts.len() {
-                        break;
-                    }
-                }
-                "blob" => {
-                    selector.pop();
-                    found = true;
+        let kind = git_capture_with_auth(repository, ["cat-file", "-t", &object], github_auth)
+            .with_context(|| {
+                format!("failed to resolve selected path {slash_path:?} at {revision}")
+            })?;
+        match kind.as_str() {
+            "commit" | "tree" => {
+                enters_submodule = kind == "commit";
+                if kind == "commit" || index + 1 == parts.len() {
                     break;
                 }
-                other => bail!("selected Git object has unsupported type {other:?}"),
             }
-        } else {
-            break;
+            "blob" => {
+                selector.pop();
+                break;
+            }
+            other => bail!("selected Git object has unsupported type {other:?}"),
         }
     }
-    ensure!(
-        found,
-        "selected path {slash_path:?} does not exist at revision {revision}"
-    );
 
     git_status(
         repository,
@@ -832,9 +832,16 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repository)
+    git_capture_with_auth(repository, arguments, false)
+}
+
+fn git_capture_with_auth<I, S>(repository: &Path, arguments: I, github_auth: bool) -> Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command = git_command(repository, github_auth);
+    let output = command
         .args(arguments)
         .stdin(Stdio::null())
         .output()
@@ -855,9 +862,8 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repository)
+    let mut command = git_command(repository, false);
+    let output = command
         .args(arguments)
         .stdin(Stdio::null())
         .output()
@@ -906,6 +912,17 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let mut command = git_command(repository, github_auth);
+    command.args(arguments);
+    let status = command_status(&mut command, action)?;
+    ensure!(
+        status.success(),
+        "failed to {action}; git exited with status {status}"
+    );
+    Ok(())
+}
+
+fn git_command(repository: &Path, github_auth: bool) -> Command {
     let mut command = Command::new("git");
     command.arg("-C").arg(repository);
     if github_auth {
@@ -915,13 +932,7 @@ where
             .arg("-c")
             .arg("credential.https://github.com.helper=!gh auth git-credential");
     }
-    command.args(arguments);
-    let status = command_status(&mut command, action)?;
-    ensure!(
-        status.success(),
-        "failed to {action}; git exited with status {status}"
-    );
-    Ok(())
+    command
 }
 
 fn command_status(command: &mut Command, action: &str) -> Result<std::process::ExitStatus> {
@@ -1292,6 +1303,27 @@ mod tests {
         assert!(arguments.contains(&"--no-single-branch"));
         assert!(arguments.contains(&"--tags"));
         assert!(!arguments.contains(&"--single-branch"));
+    }
+
+    #[test]
+    fn authenticated_git_commands_use_the_cli_credential_helper() {
+        let command = git_command(Path::new("repository"), true);
+        let arguments = command
+            .get_args()
+            .map(|value| value.to_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            arguments,
+            [
+                "-C",
+                "repository",
+                "-c",
+                "credential.https://github.com.helper=",
+                "-c",
+                "credential.https://github.com.helper=!gh auth git-credential",
+            ]
+        );
     }
 
     #[test]
