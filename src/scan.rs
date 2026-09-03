@@ -334,9 +334,7 @@ fn collect_directory(
         .parents(!config.include_ignored)
         .require_git(false);
     if !config.include_ignored {
-        if let Some(error) = builder.add_custom_ignore_filename(".onefilerepoignore") {
-            bail!("failed to configure .onefilerepoignore handling: {error}");
-        }
+        builder.add_custom_ignore_filename(".onefilerepoignore");
     }
 
     builder.build_parallel().run(|| {
@@ -641,18 +639,28 @@ fn normalized_output_path(path: Option<&Path>) -> Result<Option<PathBuf>> {
     } else {
         std::env::current_dir()?.join(path)
     };
-    if absolute.exists() {
-        return fs::canonicalize(&absolute)
-            .with_context(|| format!("failed to resolve output path {}", absolute.display()))
-            .map(Some);
+    match absolute.symlink_metadata() {
+        Ok(metadata) => ensure!(
+            !metadata.is_dir(),
+            "output path is a directory: {}",
+            absolute.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect output path {}", absolute.display()));
+        }
     }
     let parent = absolute.parent().context("output path has no parent")?;
     let filename = absolute
         .file_name()
         .context("output path has no filename")?;
-    let parent = fs::canonicalize(parent)
-        .with_context(|| format!("failed to resolve output directory {}", parent.display()))?;
-    Ok(Some(parent.join(filename)))
+    match fs::canonicalize(parent) {
+        Ok(parent) => Ok(Some(parent.join(filename))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to resolve output directory {}", parent.display())),
+    }
 }
 
 fn path_to_slash_string(path: &Path) -> Result<String> {

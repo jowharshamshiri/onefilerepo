@@ -118,6 +118,31 @@ fn file_output_is_replaced_and_never_ingests_itself() {
 }
 
 #[test]
+fn output_parent_directories_are_created_after_scanning() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("input.txt"), "payload\n").unwrap();
+
+    let output = run(
+        directory.path(),
+        [
+            ".",
+            "--output",
+            "artifacts/context/repository.txt",
+            "--quiet",
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let digest =
+        fs::read_to_string(directory.path().join("artifacts/context/repository.txt")).unwrap();
+    assert!(digest.contains("FILE: input.txt"));
+}
+
+#[test]
 fn invalid_limit_relationship_exits_without_creating_output() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("input.txt"), "data").unwrap();
