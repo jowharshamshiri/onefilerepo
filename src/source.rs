@@ -325,9 +325,13 @@ fn parse_remote(source: &str) -> Result<RemoteSpec> {
         url.query().is_none() && url.fragment().is_none(),
         "Git URLs cannot contain a query or fragment"
     );
+    ensure!(
+        url.password().is_none(),
+        "Git URLs must not contain a password; use a credential helper or SSH agent instead"
+    );
     if matches!(url.scheme(), "http" | "https") {
         ensure!(
-            url.username().is_empty() && url.password().is_none(),
+            url.username().is_empty(),
             "HTTP Git URLs must not contain credentials; authenticate GitHub CLI or a Git credential helper instead"
         );
     }
@@ -341,7 +345,7 @@ fn parse_remote(source: &str) -> Result<RemoteSpec> {
         .collect::<Result<Vec<_>>>()?;
     ensure!(!segments.is_empty(), "Git URL has no repository path");
 
-    if host.eq_ignore_ascii_case("github.com") {
+    if host.eq_ignore_ascii_case("github.com") && url.port().is_none() {
         ensure!(
             segments.len() >= 2,
             "GitHub URL must contain an owner and repository"
@@ -1099,6 +1103,13 @@ mod tests {
         let unnamespaced = parse_remote("ssh://git@git.example/widgets.git").unwrap();
         assert_eq!(unnamespaced.repository_label, "widgets");
 
+        let custom_port = parse_remote("ssh://git@github.com:2222/acme/widgets.git").unwrap();
+        assert!(custom_port.github_slug.is_none());
+        assert_eq!(
+            custom_port.clone_target,
+            "ssh://git@github.com:2222/acme/widgets.git"
+        );
+
         assert_eq!(
             repository_name_from_remote("git@git.example:group/widgets.git").unwrap(),
             Some("group/widgets".to_owned())
@@ -1128,6 +1139,7 @@ mod tests {
         assert!(repository_name_from_remote("https://host/owner/%0Arepo").is_err());
         assert!(parse_remote("user@:owner/repository.git").is_err());
         assert!(parse_remote("@host:owner/repository.git").is_err());
+        assert!(parse_remote("ssh://user:password@git.example/repository.git").is_err());
     }
 
     #[test]
