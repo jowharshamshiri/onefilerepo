@@ -904,30 +904,29 @@ fn repository_name_from_remote(remote: &str) -> Result<Option<String>> {
     if let Some(rest) = remote.strip_prefix("git@github.com:") {
         return normalize_slug(rest).map(Some);
     }
-    if let Ok(url) = Url::parse(remote) {
+    if remote.contains("://") {
+        let url = Url::parse(remote).context("origin contains an invalid URL")?;
         let segments = url
             .path_segments()
             .context("origin URL has no path")?
             .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>();
-        if segments.len() >= 2 {
-            let repository_segment = segments.last().context("origin repository is missing")?;
-            let name = format!(
-                "{}/{}",
-                percent_decode_str(segments[segments.len() - 2])
-                    .decode_utf8()
-                    .context("origin owner is not valid UTF-8")?,
-                percent_decode_str(repository_segment)
-                    .decode_utf8()
-                    .context("origin repository is not valid UTF-8")?
-                    .trim_end_matches(".git")
-            );
-            ensure!(
-                !name.chars().any(char::is_control),
-                "origin repository name contains control characters"
-            );
-            return Ok(Some(name));
-        }
+            .map(decode_url_segment)
+            .collect::<Result<Vec<_>>>()?;
+        ensure!(
+            segments.len() >= 2,
+            "origin URL does not identify a repository"
+        );
+        let repository_segment = segments.last().context("origin repository is missing")?;
+        let name = format!(
+            "{}/{}",
+            segments[segments.len() - 2],
+            repository_segment.trim_end_matches(".git")
+        );
+        ensure!(
+            !name.ends_with('/'),
+            "origin repository name cannot be empty"
+        );
+        return Ok(Some(name));
     }
     let name = repository_name_from_path(remote);
     ensure!(
@@ -1026,6 +1025,8 @@ mod tests {
         assert!(parse_remote("https://github.com/acme/widgets/issues/1").is_err());
         assert!(validate_relative_path(Path::new("../secret")).is_err());
         assert!(validate_revision(Some("--upload-pack=evil")).is_err());
+        assert!(repository_name_from_remote("https://[invalid").is_err());
+        assert!(repository_name_from_remote("https://host/owner/%0Arepo").is_err());
     }
 
     #[test]
