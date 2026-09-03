@@ -135,7 +135,7 @@ fn prepare_local(path: &Path, options: &PrepareOptions) -> Result<PreparedSource
             }
         }
 
-        commit = Some(git_capture(repo_root, ["rev-parse", "HEAD"])?);
+        commit = try_resolve_commit(repo_root, "HEAD")?;
         revision = git_capture_optional(
             repo_root,
             ["symbolic-ref", "--quiet", "--short", "HEAD"],
@@ -1198,6 +1198,19 @@ mod tests {
 
         assert_eq!(prepared.scan_root, source.canonicalize().unwrap());
         assert_eq!(prepared.metadata.label, " repository ");
+    }
+
+    #[test]
+    fn local_repository_with_an_unborn_branch_is_valid() {
+        let directory = tempfile::tempdir().unwrap();
+        test_git(directory.path(), ["init", "-b", "main"]);
+        fs::write(directory.path().join("draft.txt"), "uncommitted\n").unwrap();
+
+        let prepared = prepare(directory.path().to_str().unwrap(), &prepare_options()).unwrap();
+
+        assert_eq!(prepared.metadata.revision.as_deref(), Some("main"));
+        assert!(prepared.metadata.commit.is_none());
+        assert_eq!(prepared.metadata.working_tree_dirty, Some(true));
     }
 
     #[cfg(unix)]
