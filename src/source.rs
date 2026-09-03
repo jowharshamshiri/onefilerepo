@@ -888,10 +888,15 @@ fn normalize_slug(raw: &str) -> Result<String> {
 }
 
 fn decode_url_segment(segment: &str) -> Result<String> {
-    percent_decode_str(segment)
+    let decoded = percent_decode_str(segment)
         .decode_utf8()
         .context("Git URL path contains invalid UTF-8")
-        .map(|value| value.into_owned())
+        .map(|value| value.into_owned())?;
+    ensure!(
+        !decoded.chars().any(char::is_control),
+        "Git URL path cannot contain control characters"
+    );
+    Ok(decoded)
 }
 
 fn repository_name_from_remote(remote: &str) -> Result<Option<String>> {
@@ -906,7 +911,7 @@ fn repository_name_from_remote(remote: &str) -> Result<Option<String>> {
             .collect::<Vec<_>>();
         if segments.len() >= 2 {
             let repository_segment = segments.last().context("origin repository is missing")?;
-            return Ok(Some(format!(
+            let name = format!(
                 "{}/{}",
                 percent_decode_str(segments[segments.len() - 2])
                     .decode_utf8()
@@ -915,10 +920,21 @@ fn repository_name_from_remote(remote: &str) -> Result<Option<String>> {
                     .decode_utf8()
                     .context("origin repository is not valid UTF-8")?
                     .trim_end_matches(".git")
-            )));
+            );
+            ensure!(
+                !name.chars().any(char::is_control),
+                "origin repository name contains control characters"
+            );
+            return Ok(Some(name));
         }
     }
-    Ok(repository_name_from_path(remote))
+    let name = repository_name_from_path(remote);
+    ensure!(
+        name.as_deref()
+            .is_none_or(|value| !value.chars().any(char::is_control)),
+        "origin repository name contains control characters"
+    );
+    Ok(name)
 }
 
 fn repository_name_from_path(path: &str) -> Option<String> {
@@ -942,10 +958,17 @@ fn relative_display(root: &Path, selected: &Path) -> Result<Option<String>> {
 
 fn path_label(path: &Path) -> Result<String> {
     match path.file_name() {
-        Some(name) => name
-            .to_str()
-            .with_context(|| format!("path name is not valid UTF-8: {}", path.display()))
-            .map(str::to_owned),
+        Some(name) => {
+            let name = name
+                .to_str()
+                .with_context(|| format!("path name is not valid UTF-8: {}", path.display()))?;
+            ensure!(
+                !name.chars().any(char::is_control),
+                "path name contains control characters: {}",
+                path.display()
+            );
+            Ok(name.to_owned())
+        }
         None => Ok("root".to_owned()),
     }
 }
@@ -954,6 +977,11 @@ fn path_to_slash_string(path: &Path) -> Result<String> {
     let value = path
         .to_str()
         .with_context(|| format!("path is not valid UTF-8: {}", path.display()))?;
+    ensure!(
+        !value.chars().any(char::is_control),
+        "path contains control characters: {}",
+        path.display()
+    );
     Ok(value.replace(std::path::MAIN_SEPARATOR, "/"))
 }
 

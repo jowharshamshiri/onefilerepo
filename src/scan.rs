@@ -479,6 +479,10 @@ where
             !pattern.trim().is_empty(),
             "ignore patterns cannot be empty"
         );
+        ensure!(
+            !pattern.chars().any(char::is_control),
+            "ignore patterns cannot contain control characters"
+        );
         builder
             .add_line(None, pattern)
             .with_context(|| format!("invalid exclude pattern {pattern:?}"))?;
@@ -501,6 +505,10 @@ fn build_includes(patterns: &[String]) -> Result<Option<GlobSet>> {
         ensure!(
             !pattern.starts_with('!'),
             "include patterns cannot be negated; use --exclude for exclusions"
+        );
+        ensure!(
+            !pattern.chars().any(char::is_control),
+            "include patterns cannot contain control characters"
         );
         let pattern = pattern.strip_prefix('/').unwrap_or(pattern);
         let normalized = if pattern.ends_with('/') {
@@ -536,6 +544,11 @@ fn read_candidate(candidate: Candidate) -> Result<ScannedFile> {
             let target = target.to_str().with_context(|| {
                 format!("symlink target is not valid UTF-8: {}", target.display())
             })?;
+            ensure!(
+                !target.chars().any(char::is_control),
+                "symlink target contains control characters: {}",
+                candidate.absolute_path.display()
+            );
             FileContent::Symlink(target.replace(std::path::MAIN_SEPARATOR, "/"))
         }
         FileKind::File => {
@@ -651,6 +664,7 @@ fn normalized_output_path(path: Option<&Path>) -> Result<Option<PathBuf>> {
     let Some(path) = path else {
         return Ok(None);
     };
+    path_to_slash_string(path).context("output path is not safe for terminal reporting")?;
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -684,6 +698,11 @@ fn path_to_slash_string(path: &Path) -> Result<String> {
     let value = path
         .to_str()
         .with_context(|| format!("path is not valid UTF-8: {}", path.display()))?;
+    ensure!(
+        !value.chars().any(char::is_control),
+        "path contains control characters: {}",
+        path.display()
+    );
     Ok(value.replace(std::path::MAIN_SEPARATOR, "/"))
 }
 
@@ -742,6 +761,13 @@ mod tests {
         assert!(paths.is_match("src/lib.rs"));
         assert!(!paths.is_match("src/nested/lib.rs"));
         assert!(!paths.is_match("other/lib.rs"));
+    }
+
+    #[test]
+    fn structural_paths_with_control_characters_are_rejected() {
+        assert!(path_to_slash_string(Path::new("bad\nname.rs")).is_err());
+        assert!(build_includes(&["bad\t*.rs".to_owned()]).is_err());
+        assert!(build_ignore(Path::new("."), &["bad\rname"]).is_err());
     }
 
     #[test]
