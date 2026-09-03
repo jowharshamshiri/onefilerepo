@@ -695,8 +695,8 @@ fn discover_repository_root(path: &Path) -> Result<Option<PathBuf>> {
         .output()
         .context("failed to execute `git`; install Git and make sure it is on PATH")?;
     if output.status.success() {
-        let root = String::from_utf8(output.stdout).context("git produced non-UTF-8 output")?;
-        return Ok(Some(PathBuf::from(root.trim())));
+        let root = decode_command_stdout(output.stdout)?;
+        return Ok(Some(PathBuf::from(root)));
     }
     let has_git_marker = directory
         .ancestors()
@@ -776,9 +776,7 @@ where
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         bail!("git command failed with status {}: {stderr}", output.status);
     }
-    String::from_utf8(output.stdout)
-        .context("git produced non-UTF-8 output")
-        .map(|value| value.trim().to_owned())
+    decode_command_stdout(output.stdout)
 }
 
 fn git_capture_optional<I, S>(
@@ -798,9 +796,7 @@ where
         .output()
         .context("failed to execute `git`; install Git and make sure it is on PATH")?;
     if output.status.success() {
-        return String::from_utf8(output.stdout)
-            .context("git produced non-UTF-8 output")
-            .map(|value| Some(value.trim().to_owned()));
+        return decode_command_stdout(output.stdout).map(Some);
     }
     if output
         .status
@@ -811,6 +807,11 @@ where
     }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     bail!("git command failed with status {}: {stderr}", output.status)
+}
+
+fn decode_command_stdout(stdout: Vec<u8>) -> Result<String> {
+    let value = String::from_utf8(stdout).context("git produced non-UTF-8 output")?;
+    Ok(value.trim_end_matches(['\r', '\n']).to_owned())
 }
 
 fn git_status<I, S>(repository: &Path, arguments: I, action: &str) -> Result<()>
@@ -1035,6 +1036,13 @@ mod tests {
         assert!(looks_like_commit("deadbee"));
         assert!(!looks_like_commit("release-2026"));
         assert!(!looks_like_commit("abc"));
+    }
+
+    #[test]
+    fn git_output_decoder_preserves_leading_status_whitespace() {
+        let output =
+            decode_command_stdout(b" abcdef path/to/module (heads/main)\n".to_vec()).unwrap();
+        assert_eq!(output, " abcdef path/to/module (heads/main)");
     }
 
     #[test]

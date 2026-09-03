@@ -707,9 +707,7 @@ fn path_to_slash_string(path: &Path) -> Result<String> {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    mutex.lock().expect("scanner state mutex was poisoned")
 }
 
 #[cfg(test)]
