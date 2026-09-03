@@ -183,13 +183,14 @@ fn prepare_remote(spec: RemoteSpec, options: &PrepareOptions) -> Result<Prepared
         .context("failed to create a temporary clone directory")?;
     let clone_root = temporary.path().join("repository");
     clone_remote(&spec, &clone_root, options.revision.as_deref())?;
+    let github_auth = spec.github_slug.is_some();
 
     let (revision, url_subpath) = if spec.url_tail.is_empty() {
         let requested = options.revision.as_deref();
-        let resolved = resolve_revision(&clone_root, requested)?;
+        let resolved = resolve_revision(&clone_root, requested, github_auth)?;
         (resolved, None)
     } else {
-        resolve_url_tail(&clone_root, &spec.url_tail)?
+        resolve_url_tail(&clone_root, &spec.url_tail, github_auth)?
     };
 
     let selected_subpath = options.subpath.clone().or(url_subpath);
@@ -221,7 +222,7 @@ fn prepare_remote(spec: RemoteSpec, options: &PrepareOptions) -> Result<Prepared
             "synchronize submodule URLs",
         )?;
         let jobs = options.jobs.to_string();
-        git_status(
+        git_status_with_auth(
             &clone_root,
             [
                 OsStr::new("submodule"),
@@ -234,6 +235,7 @@ fn prepare_remote(spec: RemoteSpec, options: &PrepareOptions) -> Result<Prepared
                 OsStr::new(&jobs),
             ],
             "initialize submodules",
+            github_auth,
         )?;
         submodule_count = submodule_statuses(&clone_root)?.len();
     }
@@ -437,7 +439,11 @@ struct ResolvedRevision {
     display: Option<String>,
 }
 
-fn resolve_revision(repository: &Path, requested: Option<&str>) -> Result<ResolvedRevision> {
+fn resolve_revision(
+    repository: &Path,
+    requested: Option<&str>,
+    github_auth: bool,
+) -> Result<ResolvedRevision> {
     if let Some(requested) = requested {
         let candidates = if requested.starts_with("refs/") {
             vec![requested.to_owned()]
@@ -458,7 +464,7 @@ fn resolve_revision(repository: &Path, requested: Option<&str>) -> Result<Resolv
             }
         }
         if looks_like_commit(requested) {
-            git_status(
+            git_status_with_auth(
                 repository,
                 [
                     OsStr::new("fetch"),
@@ -468,6 +474,7 @@ fn resolve_revision(repository: &Path, requested: Option<&str>) -> Result<Resolv
                     OsStr::new(requested),
                 ],
                 "fetch the requested commit",
+                github_auth,
             )?;
             let commit = try_resolve_commit(repository, "FETCH_HEAD")?
                 .context("the requested commit was not provided by the remote")?;
@@ -501,6 +508,7 @@ fn resolve_revision(repository: &Path, requested: Option<&str>) -> Result<Resolv
 fn resolve_url_tail(
     repository: &Path,
     tail: &[String],
+    github_auth: bool,
 ) -> Result<(ResolvedRevision, Option<PathBuf>)> {
     let refs = git_capture(repository, ["for-each-ref", "--format=%(refname)"])?;
     let mut names = BTreeSet::new();
@@ -517,14 +525,14 @@ fn resolve_url_tail(
     for length in (1..=tail.len()).rev() {
         let candidate = tail[..length].join("/");
         if names.contains(&candidate) {
-            let resolved = resolve_revision(repository, Some(&candidate))?;
+            let resolved = resolve_revision(repository, Some(&candidate), github_auth)?;
             let subpath = (length < tail.len()).then(|| tail[length..].iter().collect::<PathBuf>());
             return Ok((resolved, subpath));
         }
     }
 
     if looks_like_commit(&tail[0]) {
-        let resolved = resolve_revision(repository, Some(&tail[0]))?;
+        let resolved = resolve_revision(repository, Some(&tail[0]), github_auth)?;
         let subpath = (tail.len() > 1).then(|| tail[1..].iter().collect::<PathBuf>());
         return Ok((resolved, subpath));
     }
@@ -814,6 +822,34 @@ where
     Ok(())
 }
 
+fn git_status_with_auth<I, S>(
+    repository: &Path,
+    arguments: I,
+    action: &str,
+    github_auth: bool,
+) -> Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repository);
+    if github_auth {
+        command
+            .arg("-c")
+            .arg("credential.https://github.com.helper=")
+            .arg("-c")
+            .arg("credential.https://github.com.helper=!gh auth git-credential");
+    }
+    command.args(arguments);
+    let status = command_status(&mut command, action)?;
+    ensure!(
+        status.success(),
+        "failed to {action}; git exited with status {status}"
+    );
+    Ok(())
+}
+
 fn command_status(command: &mut Command, action: &str) -> Result<std::process::ExitStatus> {
     command
         .stdin(Stdio::null())
@@ -988,7 +1024,7 @@ mod tests {
             git_capture(repository.path(), ["rev-parse", "refs/heads/release"]).unwrap();
         let tag_commit =
             git_capture(repository.path(), ["rev-parse", "refs/tags/release"]).unwrap();
-        let resolved = resolve_revision(repository.path(), Some("release")).unwrap();
+        let resolved = resolve_revision(repository.path(), Some("release"), false).unwrap();
 
         assert_ne!(branch_commit, tag_commit);
         assert_eq!(resolved.checkout, branch_commit);
