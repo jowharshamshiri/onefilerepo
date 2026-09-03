@@ -233,28 +233,32 @@ fn prepare_remote(spec: RemoteSpec, options: &PrepareOptions) -> Result<Prepared
     }
     let selected_subpath = requested_subpath.filter(|path| !selects_root(path));
     if let Some(path) = selected_subpath.as_deref() {
-        let enters_submodule =
-            configure_sparse_checkout(&clone_root, &revision.checkout, path, github_auth)?;
+        let checkout = revision
+            .checkout()
+            .context("cannot select a path from a remote repository with no commits")?;
+        let enters_submodule = configure_sparse_checkout(&clone_root, checkout, path, github_auth)?;
         ensure!(
             options.include_submodules || !enters_submodule,
             "selected path is a Git submodule; remove --no-submodules or select a path outside it"
         );
     }
-    git_status_with_auth(
-        &clone_root,
-        [
-            OsStr::new("checkout"),
-            OsStr::new("--detach"),
-            OsStr::new("--force"),
-            OsStr::new(&revision.checkout),
-            OsStr::new("--"),
-        ],
-        "check out the requested revision",
-        github_auth,
-    )?;
+    if let Some(checkout) = revision.checkout() {
+        git_status_with_auth(
+            &clone_root,
+            [
+                OsStr::new("checkout"),
+                OsStr::new("--detach"),
+                OsStr::new("--force"),
+                OsStr::new(checkout),
+                OsStr::new("--"),
+            ],
+            "check out the requested revision",
+            github_auth,
+        )?;
+    }
 
     let mut submodule_count = 0;
-    if options.include_submodules {
+    if options.include_submodules && revision.checkout().is_some() {
         git_status(
             &clone_root,
             [
@@ -286,7 +290,7 @@ fn prepare_remote(spec: RemoteSpec, options: &PrepareOptions) -> Result<Prepared
     let scan_root = resolve_subpath(&clone_root, selected_subpath.as_deref())?;
     validate_selection_kind(&scan_root, spec.selection_kind)?;
 
-    let commit = git_capture(&clone_root, ["rev-parse", "HEAD"])?;
+    let commit = try_resolve_commit(&clone_root, "HEAD")?;
     let label = match selected_subpath.as_deref() {
         Some(_) => path_label(&scan_root)?,
         None => repository_basename(&spec.repository_label)?,
@@ -297,8 +301,8 @@ fn prepare_remote(spec: RemoteSpec, options: &PrepareOptions) -> Result<Prepared
         metadata: SourceMetadata {
             label,
             repository: Some(spec.repository_label),
-            revision: revision.display,
-            commit: Some(commit),
+            revision: revision.display().map(str::to_owned),
+            commit,
             subpath: selected_subpath
                 .as_deref()
                 .map(path_to_slash_string)
@@ -479,9 +483,28 @@ fn clone_arguments(spec: &RemoteSpec, requested_revision: Option<&str>) -> Vec<O
 }
 
 #[derive(Debug)]
-struct ResolvedRevision {
-    checkout: String,
-    display: Option<String>,
+enum ResolvedRevision {
+    Empty,
+    Commit {
+        checkout: String,
+        display: Option<String>,
+    },
+}
+
+impl ResolvedRevision {
+    fn checkout(&self) -> Option<&str> {
+        match self {
+            Self::Empty => None,
+            Self::Commit { checkout, .. } => Some(checkout),
+        }
+    }
+
+    fn display(&self) -> Option<&str> {
+        match self {
+            Self::Empty => None,
+            Self::Commit { display, .. } => display.as_deref(),
+        }
+    }
 }
 
 fn resolve_revision(
@@ -498,7 +521,7 @@ fn resolve_revision(
         ];
         for candidate in candidates {
             if let Some(commit) = try_resolve_commit(repository, &candidate)? {
-                return Ok(ResolvedRevision {
+                return Ok(ResolvedRevision::Commit {
                     checkout: commit,
                     display: Some(requested.to_owned()),
                 });
@@ -519,7 +542,7 @@ fn resolve_revision(
             )?;
             let commit = try_resolve_commit(repository, "FETCH_HEAD")?
                 .context("the requested commit was not provided by the remote")?;
-            return Ok(ResolvedRevision {
+            return Ok(ResolvedRevision::Commit {
                 checkout: commit,
                 display: Some(requested.to_owned()),
             });
@@ -527,8 +550,9 @@ fn resolve_revision(
         bail!("revision {requested:?} was not found in the cloned repository");
     }
 
-    let commit = try_resolve_commit(repository, "HEAD")?
-        .context("the remote repository has no resolvable default branch")?;
+    let Some(commit) = try_resolve_commit(repository, "HEAD")? else {
+        return Ok(ResolvedRevision::Empty);
+    };
     let display = git_capture_optional(
         repository,
         [
@@ -540,7 +564,7 @@ fn resolve_revision(
         &[1],
     )?
     .and_then(|value| value.strip_prefix("origin/").map(str::to_owned));
-    Ok(ResolvedRevision {
+    Ok(ResolvedRevision::Commit {
         checkout: commit,
         display,
     })
@@ -1398,6 +1422,17 @@ mod tests {
         let resolved = resolve_revision(repository.path(), Some("release"), false).unwrap();
 
         assert_ne!(branch_commit, tag_commit);
-        assert_eq!(resolved.checkout, branch_commit);
+        assert_eq!(resolved.checkout(), Some(branch_commit.as_str()));
+    }
+
+    #[test]
+    fn resolves_an_empty_remote_repository_without_inventing_a_commit() {
+        let repository = tempfile::tempdir().unwrap();
+        test_git(repository.path(), ["init", "-b", "main"]);
+
+        let resolved = resolve_revision(repository.path(), None, false).unwrap();
+
+        assert!(resolved.checkout().is_none());
+        assert!(resolved.display().is_none());
     }
 }
