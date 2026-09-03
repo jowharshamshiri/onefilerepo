@@ -551,6 +551,15 @@ fn resolve_revision(
     }
 
     let Some(commit) = try_resolve_commit(repository, "HEAD")? else {
+        let remote_refs = git_capture_with_auth(
+            repository,
+            ["ls-remote", "--heads", "--tags", "origin"],
+            github_auth,
+        )?;
+        ensure!(
+            remote_refs.is_empty(),
+            "the remote repository contains refs but has no resolvable default branch"
+        );
         return Ok(ResolvedRevision::Empty);
     };
     let display = git_capture_optional(
@@ -1429,6 +1438,15 @@ mod tests {
     fn resolves_an_empty_remote_repository_without_inventing_a_commit() {
         let repository = tempfile::tempdir().unwrap();
         test_git(repository.path(), ["init", "-b", "main"]);
+        test_git(
+            repository.path(),
+            [
+                OsStr::new("remote"),
+                OsStr::new("add"),
+                OsStr::new("origin"),
+                repository.path().as_os_str(),
+            ],
+        );
 
         let resolved = resolve_revision(repository.path(), None, false).unwrap();
 
