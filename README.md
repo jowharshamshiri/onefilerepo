@@ -39,7 +39,7 @@ onefilerepo ~/work/my-project
 onefilerepo owner/repository
 onefilerepo https://github.com/owner/repository
 
-# A branch, tag, or commit and a repository-relative subtree
+# A branch, tag, or full commit ID and a repository-relative subtree
 onefilerepo owner/repository --ref feature/api --path crates/server
 
 # GitHub tree and blob URLs are understood directly, including branch names

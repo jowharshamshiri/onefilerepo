@@ -26,7 +26,7 @@ struct Cli {
     #[arg(default_value = ".")]
     source: String,
 
-    /// Branch, tag, or commit to ingest (remote sources only).
+    /// Branch, tag, or full commit ID to ingest (remote sources only).
     #[arg(short = 'r', long = "ref", value_name = "REVISION")]
     revision: Option<String>,
 

@@ -740,7 +740,7 @@ fn submodule_statuses(repository: &Path) -> Result<Vec<SubmoduleStatus>> {
                 .split_once(' ')
                 .context("submodule status is missing a path")?;
             ensure!(
-                commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                is_full_object_id(commit),
                 "submodule status contains an invalid commit ID"
             );
             let path = path_and_description
@@ -994,7 +994,11 @@ fn path_to_slash_string(path: &Path) -> Result<String> {
 }
 
 fn looks_like_commit(value: &str) -> bool {
-    (7..=40).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    is_full_object_id(value)
+}
+
+fn is_full_object_id(value: &str) -> bool {
+    matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[cfg(test)]
@@ -1042,7 +1046,10 @@ mod tests {
         assert!(looks_like_commit(
             "0123456789abcdef0123456789abcdef01234567"
         ));
-        assert!(looks_like_commit("deadbee"));
+        assert!(looks_like_commit(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+        assert!(!looks_like_commit("deadbee"));
         assert!(!looks_like_commit("release-2026"));
         assert!(!looks_like_commit("abc"));
     }
