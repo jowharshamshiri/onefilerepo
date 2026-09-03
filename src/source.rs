@@ -309,11 +309,10 @@ fn parse_remote(source: &str) -> Result<RemoteSpec> {
         }
     }
 
-    if source.contains('@') && source.contains(':') && !source.contains("://") {
-        let label = source
-            .rsplit_once(':')
-            .and_then(|(_, path)| repository_name_from_path(path))
-            .unwrap_or_else(|| source.to_owned());
+    if let Some(remote_path) = scp_remote_path(source)? {
+        let label = repository_name_from_path(remote_path)
+            .context("SCP-style Git remote has no repository name")?;
+        validate_repository_label(&label)?;
         return Ok(RemoteSpec {
             clone_target: source.to_owned(),
             github_slug: None,
@@ -349,12 +348,13 @@ fn parse_remote(source: &str) -> Result<RemoteSpec> {
         .filter(|segment| !segment.is_empty())
         .map(decode_url_segment)
         .collect::<Result<Vec<_>>>()?;
-    ensure!(
-        segments.len() >= 2,
-        "Git URL must contain an owner and repository"
-    );
+    ensure!(!segments.is_empty(), "Git URL has no repository path");
 
     if host.eq_ignore_ascii_case("github.com") {
+        ensure!(
+            segments.len() >= 2,
+            "GitHub URL must contain an owner and repository"
+        );
         let slug = normalize_slug(&format!("{}/{}", segments[0], segments[1]))?;
         let (selection_kind, url_tail) = match segments.get(2).map(String::as_str) {
             None => (None, Vec::new()),
@@ -379,11 +379,9 @@ fn parse_remote(source: &str) -> Result<RemoteSpec> {
         });
     }
 
-    ensure!(
-        segments.len() == 2,
-        "subpaths in non-GitHub URLs require --ref and --path"
-    );
-    let label = format!("{}/{}", segments[0], segments[1].trim_end_matches(".git"));
+    let label =
+        repository_name_from_path(&segments.join("/")).context("Git URL has no repository name")?;
+    validate_repository_label(&label)?;
     Ok(RemoteSpec {
         clone_target: source.to_owned(),
         github_slug: None,
@@ -920,20 +918,15 @@ fn repository_name_from_remote(remote: &str) -> Result<Option<String>> {
             .filter(|part| !part.is_empty())
             .map(decode_url_segment)
             .collect::<Result<Vec<_>>>()?;
-        ensure!(
-            segments.len() >= 2,
-            "origin URL does not identify a repository"
-        );
-        let repository_segment = segments.last().context("origin repository is missing")?;
-        let name = format!(
-            "{}/{}",
-            segments[segments.len() - 2],
-            repository_segment.trim_end_matches(".git")
-        );
-        ensure!(
-            !name.ends_with('/'),
-            "origin repository name cannot be empty"
-        );
+        let name = repository_name_from_path(&segments.join("/"))
+            .context("origin URL does not identify a repository")?;
+        validate_repository_label(&name)?;
+        return Ok(Some(name));
+    }
+    if let Some(remote_path) = scp_remote_path(remote)? {
+        let name = repository_name_from_path(remote_path)
+            .context("SCP-style origin has no repository name")?;
+        validate_repository_label(&name)?;
         return Ok(Some(name));
     }
     let name = repository_name_from_path(remote);
@@ -945,12 +938,47 @@ fn repository_name_from_remote(remote: &str) -> Result<Option<String>> {
     Ok(name)
 }
 
+fn scp_remote_path(remote: &str) -> Result<Option<&str>> {
+    if remote.contains("://") || !remote.contains('@') || !remote.contains(':') {
+        return Ok(None);
+    }
+    let (authority, remote_path) = remote
+        .rsplit_once(':')
+        .context("SCP-style Git remote is missing a repository path")?;
+    let (user, host) = authority
+        .split_once('@')
+        .context("SCP-style Git remote must have the form user@host:path")?;
+    ensure!(
+        !user.is_empty() && !host.is_empty() && !host.contains('/'),
+        "SCP-style Git remote has an invalid user or host"
+    );
+    ensure!(
+        !authority.chars().any(char::is_control),
+        "SCP-style Git remote cannot contain control characters"
+    );
+    Ok(Some(remote_path))
+}
+
 fn repository_name_from_path(path: &str) -> Option<String> {
     let trimmed = path.trim_matches('/').trim_end_matches(".git");
+    if trimmed.is_empty() {
+        return None;
+    }
     let mut parts = trimmed.rsplit('/');
     let repo = parts.next()?;
-    let owner = parts.next()?;
-    Some(format!("{owner}/{repo}"))
+    Some(match parts.next() {
+        Some(owner) => format!("{owner}/{repo}"),
+        None => repo.to_owned(),
+    })
+}
+
+fn validate_repository_label(label: &str) -> Result<()> {
+    ensure!(!label.is_empty(), "repository name cannot be empty");
+    ensure!(
+        !label.chars().any(char::is_control),
+        "repository name cannot contain control characters"
+    );
+    Ok(())
 }
 
 fn relative_display(root: &Path, selected: &Path) -> Result<Option<String>> {
@@ -1029,6 +1057,17 @@ mod tests {
             parse_remote("https://github.com/acme/widgets/tree/feature/api/src/lib").unwrap();
         assert_eq!(tree.selection_kind, Some(SelectionKind::Tree));
         assert_eq!(tree.url_tail, ["feature", "api", "src", "lib"]);
+
+        let nested = parse_remote("https://git.example/group/team/widgets.git").unwrap();
+        assert_eq!(nested.repository_label, "team/widgets");
+
+        let unnamespaced = parse_remote("ssh://git@git.example/widgets.git").unwrap();
+        assert_eq!(unnamespaced.repository_label, "widgets");
+
+        assert_eq!(
+            repository_name_from_remote("git@git.example:group/widgets.git").unwrap(),
+            Some("group/widgets".to_owned())
+        );
     }
 
     #[test]
@@ -1039,6 +1078,8 @@ mod tests {
         assert!(validate_revision(Some("--upload-pack=evil")).is_err());
         assert!(repository_name_from_remote("https://[invalid").is_err());
         assert!(repository_name_from_remote("https://host/owner/%0Arepo").is_err());
+        assert!(parse_remote("user@:owner/repository.git").is_err());
+        assert!(parse_remote("@host:owner/repository.git").is_err());
     }
 
     #[test]
