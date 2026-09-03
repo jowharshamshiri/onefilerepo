@@ -75,12 +75,13 @@ short forms `k`, `m`, and `g` are also accepted). Limits are applied after a
 stable path sort. Omitted-file counts are reported in the summary, so a digest
 can never be silently and nondeterministically truncated.
 
-The built-in exclusions remove VCS internals, dependency trees, build output,
-caches, lock files, databases, archives, and common binary media. Repository
-`.gitignore` files, global Git ignores, `.ignore` files, and nested
-`.onefilerepoignore` files are honored. Pass `--include-ignored` to disable those
-repository/user ignore files; the safety-oriented built-in exclusions and
-explicit `--exclude` rules still apply.
+The built-in exclusions remove VCS internals, common secret-bearing files,
+dependency trees, build output, caches, lock files, databases, archives, and
+common binary media. Safe environment templates such as `.env.example` remain
+eligible. Repository `.gitignore` files, global Git ignores, `.ignore` files,
+and nested `.onefilerepoignore` files are honored. Pass `--include-ignored` to
+disable those repository/user ignore files; the safety-oriented built-in
+exclusions and explicit `--exclude` rules still apply.
 
 ### Submodules
 

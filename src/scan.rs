@@ -21,6 +21,22 @@ const DEFAULT_IGNORES: &[&str] = &[
     ".DS_Store",
     "Thumbs.db",
     "desktop.ini",
+    ".env",
+    ".env.*",
+    "!.env.example",
+    "!.env.sample",
+    "!.env.template",
+    ".envrc",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    "*.pem",
+    "*.p12",
+    "*.pfx",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
     "digest.txt",
     ".onefilerepo-*.tmp",
     "*.py[cod]",
@@ -747,6 +763,24 @@ mod tests {
 
         assert_eq!(result.files.len(), 1);
         assert_eq!(result.files[0].relative_path, "src/lib.rs");
+    }
+
+    #[test]
+    fn excludes_secret_files_but_keeps_environment_templates() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join(".env"), "TOKEN=secret\n").unwrap();
+        fs::write(directory.path().join(".env.production"), "TOKEN=secret\n").unwrap();
+        fs::write(directory.path().join(".env.example"), "TOKEN=replace-me\n").unwrap();
+        fs::write(directory.path().join("server.pem"), "private material\n").unwrap();
+
+        let result = scan(&config(directory.path())).unwrap();
+        let paths = result
+            .files
+            .iter()
+            .map(|file| file.relative_path.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(paths, [".env.example"]);
     }
 
     #[test]
