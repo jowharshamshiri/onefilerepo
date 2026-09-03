@@ -384,10 +384,20 @@ mod tests {
         let mut output = Vec::new();
         digest.write_to(&mut output).unwrap();
         let output = String::from_utf8(output).unwrap();
-        assert!(output.contains(
-            "FILE: README.md\n================================================\nhello\n"
-        ));
-        assert!(digest.estimated_tokens() > 0);
+        assert_eq!(
+            output,
+            concat!(
+                "Directory structure:\n",
+                "└── sample/\n",
+                "    └── README.md\n",
+                "\n",
+                "================================================\n",
+                "FILE: README.md\n",
+                "================================================\n",
+                "hello\n",
+                "\n",
+            )
+        );
     }
 
     #[test]
@@ -414,5 +424,11 @@ mod tests {
 
         assert_eq!(digest.tree(), "Directory structure:\n└── empty/\n");
         assert!(digest.summary().contains("Files analyzed: 0"));
+    }
+
+    #[test]
+    fn lexical_token_estimate_counts_words_and_punctuation() {
+        assert_eq!(estimate_tokens("alpha_beta += 42;"), 7);
+        assert_eq!(estimate_tokens("eightletters"), 3);
     }
 }

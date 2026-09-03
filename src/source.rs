@@ -1315,11 +1315,16 @@ mod tests {
             .map(|value| value.to_str().unwrap())
             .collect::<Vec<_>>();
 
-        assert!(arguments.contains(&"--filter=blob:none"));
-        assert!(arguments.contains(&"--depth=1"));
-        assert!(arguments.contains(&"--no-single-branch"));
-        assert!(arguments.contains(&"--tags"));
-        assert!(!arguments.contains(&"--single-branch"));
+        assert_eq!(
+            arguments,
+            [
+                "--filter=blob:none",
+                "--no-checkout",
+                "--depth=1",
+                "--no-single-branch",
+                "--tags",
+            ]
+        );
     }
 
     #[test]
