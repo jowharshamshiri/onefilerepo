@@ -52,15 +52,14 @@ struct RemoteSpec {
 }
 
 pub fn prepare(source: &str, options: &PrepareOptions) -> Result<PreparedSource> {
-    let trimmed = source.trim();
-    ensure!(!trimmed.is_empty(), "source cannot be empty");
+    ensure!(!source.is_empty(), "source cannot be empty");
 
-    let local = Path::new(trimmed);
+    let local = Path::new(source);
     if local.exists() {
         return prepare_local(local, options);
     }
 
-    prepare_remote(parse_remote(trimmed)?, options)
+    prepare_remote(parse_remote(source)?, options)
 }
 
 fn prepare_local(path: &Path, options: &PrepareOptions) -> Result<PreparedSource> {
@@ -1074,6 +1073,15 @@ mod tests {
         assert!(status.success());
     }
 
+    fn prepare_options() -> PrepareOptions {
+        PrepareOptions {
+            revision: None,
+            subpath: None,
+            include_submodules: true,
+            jobs: 1,
+        }
+    }
+
     #[test]
     fn parses_repository_and_tree_urls_without_guessing_the_ref() {
         let root = parse_remote("https://github.com/acme/widgets.git").unwrap();
@@ -1095,6 +1103,19 @@ mod tests {
             repository_name_from_remote("git@git.example:group/widgets.git").unwrap(),
             Some("group/widgets".to_owned())
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_paths_preserve_surrounding_whitespace() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join(" repository ");
+        fs::create_dir(&source).unwrap();
+
+        let prepared = prepare(source.to_str().unwrap(), &prepare_options()).unwrap();
+
+        assert_eq!(prepared.scan_root, source.canonicalize().unwrap());
+        assert_eq!(prepared.metadata.label, " repository ");
     }
 
     #[test]
