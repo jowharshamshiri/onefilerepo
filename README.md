@@ -6,6 +6,10 @@ repositories through the authenticated GitHub CLI, and uses Git for all other
 remotes. Private repositories and recursive submodules therefore use the same
 credentials you already use locally.
 
+Repository contents are processed in the local process and are never uploaded
+by the utility. Remote sources are checked out into an automatically removed
+temporary directory; only the requested digest is retained.
+
 The utility is written in Rust and designed for large repositories: clone-time
 blob filtering and sparse checkout reduce network transfer, directory walking
 uses native ignore semantics, file reads run in parallel, and results are sorted
@@ -23,7 +27,7 @@ Requirements:
 Install directly from the repository:
 
 ```sh
-cargo install --git https://github.com/jowharshamshiri/onefilerepo.git
+cargo install --locked --git https://github.com/jowharshamshiri/onefilerepo.git
 ```
 
 ## Usage
