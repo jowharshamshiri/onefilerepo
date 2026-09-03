@@ -398,18 +398,7 @@ fn clone_remote(
     destination: &Path,
     requested_revision: Option<&str>,
 ) -> Result<()> {
-    let mut git_arguments = vec![
-        OsString::from("--filter=blob:none"),
-        OsString::from("--no-checkout"),
-    ];
-    if spec.url_tail.is_empty() {
-        git_arguments.push(OsString::from("--depth=1"));
-        git_arguments.push(OsString::from("--single-branch"));
-        if let Some(revision) = requested_revision.filter(|value| !looks_like_commit(value)) {
-            git_arguments.push(OsString::from("--branch"));
-            git_arguments.push(OsString::from(revision));
-        }
-    }
+    let git_arguments = clone_arguments(spec, requested_revision);
 
     let status = if let Some(slug) = spec.github_slug.as_deref() {
         let mut command = Command::new("gh");
@@ -435,6 +424,25 @@ fn clone_remote(
         "repository clone failed with status {status}"
     );
     Ok(())
+}
+
+fn clone_arguments(spec: &RemoteSpec, requested_revision: Option<&str>) -> Vec<OsString> {
+    let mut arguments = vec![
+        OsString::from("--filter=blob:none"),
+        OsString::from("--no-checkout"),
+        OsString::from("--depth=1"),
+    ];
+    if spec.url_tail.is_empty() {
+        arguments.push(OsString::from("--single-branch"));
+        if let Some(revision) = requested_revision.filter(|value| !looks_like_commit(value)) {
+            arguments.push(OsString::from("--branch"));
+            arguments.push(OsString::from(revision));
+        }
+    } else {
+        arguments.push(OsString::from("--no-single-branch"));
+        arguments.push(OsString::from("--tags"));
+    }
+    arguments
 }
 
 #[derive(Debug)]
@@ -1037,6 +1045,22 @@ mod tests {
         assert!(looks_like_commit("deadbee"));
         assert!(!looks_like_commit("release-2026"));
         assert!(!looks_like_commit("abc"));
+    }
+
+    #[test]
+    fn url_selection_clones_all_ref_tips_without_full_history() {
+        let spec = parse_remote("https://github.com/acme/widgets/tree/release/src").unwrap();
+        let arguments = clone_arguments(&spec, None);
+        let arguments = arguments
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert!(arguments.contains(&"--filter=blob:none"));
+        assert!(arguments.contains(&"--depth=1"));
+        assert!(arguments.contains(&"--no-single-branch"));
+        assert!(arguments.contains(&"--tags"));
+        assert!(!arguments.contains(&"--single-branch"));
     }
 
     #[test]
