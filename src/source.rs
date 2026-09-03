@@ -55,8 +55,13 @@ pub fn prepare(source: &str, options: &PrepareOptions) -> Result<PreparedSource>
     ensure!(!source.is_empty(), "source cannot be empty");
 
     let local = Path::new(source);
-    if local.exists() {
-        return prepare_local(local, options);
+    match local.symlink_metadata() {
+        Ok(_) => return prepare_local(local, options),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect local source {}", local.display()));
+        }
     }
 
     prepare_remote(parse_remote(source)?, options)
@@ -68,8 +73,13 @@ fn prepare_local(path: &Path, options: &PrepareOptions) -> Result<PreparedSource
         "--ref is only valid for remote sources; local sources always represent their current working tree"
     );
 
-    let source_root = fs::canonicalize(path)
-        .with_context(|| format!("failed to resolve local source {}", path.display()))?;
+    let source_root = resolve_local_source(path)?;
+    if options.subpath.is_some() {
+        ensure!(
+            source_root.symlink_metadata()?.file_type().is_dir(),
+            "--path requires the local source to be a directory"
+        );
+    }
     let scan_root = resolve_subpath(&source_root, options.subpath.as_deref())?;
     let repository_root = discover_repository_root(&source_root)?;
 
@@ -161,6 +171,31 @@ fn prepare_local(path: &Path, options: &PrepareOptions) -> Result<PreparedSource
         excluded_submodules,
         _temporary: None,
     })
+}
+
+fn resolve_local_source(path: &Path) -> Result<PathBuf> {
+    let metadata = path
+        .symlink_metadata()
+        .with_context(|| format!("failed to inspect local source {}", path.display()))?;
+    if !metadata.file_type().is_symlink() {
+        return fs::canonicalize(path)
+            .with_context(|| format!("failed to resolve local source {}", path.display()));
+    }
+
+    let parent = path
+        .parent()
+        .filter(|value| !value.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let resolved_parent = fs::canonicalize(parent).with_context(|| {
+        format!(
+            "failed to resolve the parent of local source {}",
+            path.display()
+        )
+    })?;
+    let filename = path
+        .file_name()
+        .context("local symlink source has no filename")?;
+    Ok(resolved_parent.join(filename))
 }
 
 fn prepare_remote(spec: RemoteSpec, options: &PrepareOptions) -> Result<PreparedSource> {
@@ -708,7 +743,12 @@ fn validate_revision(revision: Option<&str>) -> Result<()> {
 }
 
 fn discover_repository_root(path: &Path) -> Result<Option<PathBuf>> {
-    let directory = if path.is_dir() {
+    let is_directory = path
+        .symlink_metadata()
+        .with_context(|| format!("failed to inspect local source {}", path.display()))?
+        .file_type()
+        .is_dir();
+    let directory = if is_directory {
         path
     } else {
         path.parent()
@@ -1127,6 +1167,52 @@ mod tests {
 
         assert_eq!(prepared.scan_root, source.canonicalize().unwrap());
         assert_eq!(prepared.metadata.label, " repository ");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_symlink_sources_are_not_followed() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        let link = directory.path().join("link");
+        let dangling = directory.path().join("dangling");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("secret.txt"), "not followed").unwrap();
+        symlink(&target, &link).unwrap();
+        symlink("missing", &dangling).unwrap();
+
+        let prepared = prepare(link.to_str().unwrap(), &prepare_options()).unwrap();
+
+        assert!(
+            prepared
+                .scan_root
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(prepared.metadata.label, "link");
+        let dangling = prepare(dangling.to_str().unwrap(), &prepare_options()).unwrap();
+        assert!(
+            dangling
+                .scan_root
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(
+            prepare(
+                link.to_str().unwrap(),
+                &PrepareOptions {
+                    subpath: Some(PathBuf::from("secret.txt")),
+                    ..prepare_options()
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]

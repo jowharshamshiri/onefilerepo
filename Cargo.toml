@@ -1,6 +1,6 @@
 [package]
 name = "onefilerepo"
-version = "0.24.114"
+version = "0.25.119"
 edition = "2024"
 rust-version = "1.88"
 description = "A fast, local-first CLI that turns Git repositories into LLM-ready text digests"
