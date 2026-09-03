@@ -191,6 +191,31 @@ struct Candidate {
     size: u64,
 }
 
+struct WalkBatch<'a> {
+    candidates: Vec<Candidate>,
+    errors: Vec<String>,
+    stats: ScanStats,
+    shared_candidates: &'a Mutex<Vec<Candidate>>,
+    shared_errors: &'a Mutex<Vec<String>>,
+    shared_stats: &'a Mutex<ScanStats>,
+}
+
+impl Drop for WalkBatch<'_> {
+    fn drop(&mut self) {
+        if !self.candidates.is_empty() {
+            lock(self.shared_candidates).append(&mut self.candidates);
+        }
+        if !self.errors.is_empty() {
+            lock(self.shared_errors).append(&mut self.errors);
+        }
+        if self.stats.skipped_too_large > 0 || self.stats.skipped_by_depth > 0 {
+            let mut shared = lock(self.shared_stats);
+            shared.skipped_too_large += self.stats.skipped_too_large;
+            shared.skipped_by_depth += self.stats.skipped_by_depth;
+        }
+    }
+}
+
 pub fn scan(config: &ScanConfig) -> Result<ScanResult> {
     let root_metadata = config.root.symlink_metadata().with_context(|| {
         format!(
@@ -362,11 +387,19 @@ fn collect_directory(
     }
 
     builder.build_parallel().run(|| {
-        Box::new(|entry| {
+        let mut batch = WalkBatch {
+            candidates: Vec::new(),
+            errors: Vec::new(),
+            stats: ScanStats::default(),
+            shared_candidates: &candidates,
+            shared_errors: &errors,
+            shared_stats: &stats,
+        };
+        Box::new(move |entry| {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(error) => {
-                    lock(&errors).push(error.to_string());
+                    batch.errors.push(error.to_string());
                     return WalkState::Continue;
                 }
             };
@@ -376,12 +409,16 @@ fn collect_directory(
             let relative = match entry.path().strip_prefix(&config.root) {
                 Ok(path) => path,
                 Err(error) => {
-                    lock(&errors).push(format!("walked path escaped the scan root: {error}"));
+                    batch
+                        .errors
+                        .push(format!("walked path escaped the scan root: {error}"));
                     return WalkState::Continue;
                 }
             };
             if relative.to_str().is_none() {
-                lock(&errors).push(format!("path is not valid UTF-8: {}", relative.display()));
+                batch
+                    .errors
+                    .push(format!("path is not valid UTF-8: {}", relative.display()));
                 return WalkState::Continue;
             }
 
@@ -397,7 +434,7 @@ fn collect_directory(
                 };
             }
             if entry.depth() > config.max_depth {
-                lock(&stats).skipped_by_depth += 1;
+                batch.stats.skipped_by_depth += 1;
                 return if is_directory {
                     WalkState::Skip
                 } else {
@@ -419,9 +456,11 @@ fn collect_directory(
             }
 
             match candidate_from_entry(&entry, relative, config.max_file_size) {
-                Ok(Some(candidate)) => lock(&candidates).push(candidate),
-                Ok(None) => lock(&stats).skipped_too_large += 1,
-                Err(error) => lock(&errors).push(format!("{}: {error:#}", entry.path().display())),
+                Ok(Some(candidate)) => batch.candidates.push(candidate),
+                Ok(None) => batch.stats.skipped_too_large += 1,
+                Err(error) => batch
+                    .errors
+                    .push(format!("{}: {error:#}", entry.path().display())),
             }
             WalkState::Continue
         })
