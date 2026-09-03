@@ -169,6 +169,24 @@ fn invalid_limit_relationship_exits_without_creating_output() {
 }
 
 #[test]
+fn empty_directory_produces_a_valid_zero_file_digest() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = run(directory.path(), [".", "--output", "-", "--quiet"]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let digest = String::from_utf8(output.stdout).unwrap();
+    let root_name = directory.path().file_name().unwrap().to_string_lossy();
+    assert_eq!(
+        digest,
+        format!("Directory structure:\n└── {root_name}/\n\n")
+    );
+}
+
+#[test]
 fn local_submodules_are_included_or_strictly_excluded() {
     let sandbox = tempfile::tempdir().unwrap();
     let child = sandbox.path().join("child");

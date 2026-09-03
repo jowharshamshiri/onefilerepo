@@ -19,8 +19,8 @@ pub struct Digest {
 impl Digest {
     pub fn new(metadata: SourceMetadata, scan: ScanResult) -> Result<Self> {
         ensure!(
-            !scan.files.is_empty(),
-            "cannot create a digest without files"
+            !scan.root_is_file || scan.files.len() == 1,
+            "a single-file digest must contain exactly one file"
         );
         ensure!(
             scan.root_name == metadata.label,
@@ -388,5 +388,31 @@ mod tests {
             "FILE: README.md\n================================================\nhello\n"
         ));
         assert!(digest.estimated_tokens() > 0);
+    }
+
+    #[test]
+    fn empty_directory_has_a_complete_tree_and_summary() {
+        let scan = ScanResult {
+            root_name: "empty".to_owned(),
+            root_is_file: false,
+            files: Vec::new(),
+            stats: ScanStats::default(),
+        };
+        let digest = Digest::new(
+            SourceMetadata {
+                label: "empty".to_owned(),
+                repository: None,
+                revision: None,
+                commit: None,
+                subpath: None,
+                submodule_count: 0,
+                working_tree_dirty: None,
+            },
+            scan,
+        )
+        .unwrap();
+
+        assert_eq!(digest.tree(), "Directory structure:\n└── empty/\n");
+        assert!(digest.summary().contains("Files analyzed: 0"));
     }
 }

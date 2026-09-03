@@ -251,8 +251,8 @@ pub fn scan(config: &ScanConfig) -> Result<ScanResult> {
         selected.push(candidate);
     }
     ensure!(
-        !selected.is_empty(),
-        "no files matched the requested filters and limits under {}",
+        !root_is_file || !selected.is_empty(),
+        "the selected file was excluded by the requested filters or limits: {}",
         config.root.display()
     );
 
@@ -411,8 +411,10 @@ fn collect_directory(
         })
     });
 
-    let errors = lock(&errors);
+    let mut errors = lock(&errors);
     if !errors.is_empty() {
+        errors.sort_unstable();
+        errors.dedup();
         bail!("filesystem traversal failed:\n{}", errors.join("\n"));
     }
     let candidates = std::mem::take(&mut *lock(&candidates));
@@ -762,6 +764,15 @@ mod tests {
             ["a.txt", "b.txt"]
         );
         assert_eq!(result.stats.skipped_by_limits, 1);
+    }
+
+    #[test]
+    fn empty_directories_are_valid_scan_results() {
+        let directory = tempfile::tempdir().unwrap();
+        let result = scan(&config(directory.path())).unwrap();
+        assert!(result.files.is_empty());
+        assert_eq!(result.stats.discovered, 0);
+        assert_eq!(result.stats.included_bytes, 0);
     }
 
     #[test]
