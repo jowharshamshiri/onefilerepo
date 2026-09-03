@@ -496,13 +496,20 @@ fn build_includes(patterns: &[String]) -> Result<Option<GlobSet>> {
             !pattern.trim().is_empty(),
             "include patterns cannot be empty"
         );
+        ensure!(
+            !pattern.starts_with('!'),
+            "include patterns cannot be negated; use --exclude for exclusions"
+        );
+        let pattern = pattern.strip_prefix('/').unwrap_or(pattern);
         let normalized = if pattern.ends_with('/') {
             format!("{pattern}**")
+        } else if pattern.contains('/') {
+            pattern.to_owned()
         } else {
-            pattern.clone()
+            format!("**/{pattern}")
         };
         let glob = GlobBuilder::new(&normalized)
-            .literal_separator(false)
+            .literal_separator(true)
             .backslash_escape(true)
             .build()
             .with_context(|| format!("invalid include pattern {pattern:?}"))?;
@@ -721,6 +728,18 @@ mod tests {
 
         assert_eq!(result.files.len(), 1);
         assert_eq!(result.files[0].relative_path, "src/lib.rs");
+    }
+
+    #[test]
+    fn include_globs_distinguish_basename_and_path_patterns() {
+        let basenames = build_includes(&["*.rs".to_owned()]).unwrap().unwrap();
+        assert!(basenames.is_match("lib.rs"));
+        assert!(basenames.is_match("src/lib.rs"));
+
+        let paths = build_includes(&["src/*.rs".to_owned()]).unwrap().unwrap();
+        assert!(paths.is_match("src/lib.rs"));
+        assert!(!paths.is_match("src/nested/lib.rs"));
+        assert!(!paths.is_match("other/lib.rs"));
     }
 
     #[test]

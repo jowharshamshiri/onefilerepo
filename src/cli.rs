@@ -57,7 +57,7 @@ struct Cli {
     include_ignored: bool,
 
     /// Do not initialize or include Git submodules.
-    #[arg(long = "no-submodules", action = ArgAction::SetFalse, default_value_t = true)]
+    #[arg(long = "no-submodules", action = ArgAction::SetFalse)]
     include_submodules: bool,
 
     /// Maximum size of any included file in bytes.

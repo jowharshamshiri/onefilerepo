@@ -196,7 +196,11 @@ fn prepare_remote(spec: RemoteSpec, options: &PrepareOptions) -> Result<Prepared
     let selected_subpath = options.subpath.clone().or(url_subpath);
     if let Some(path) = selected_subpath.as_deref() {
         validate_relative_path(path)?;
-        configure_sparse_checkout(&clone_root, &revision.checkout, path)?;
+        let enters_submodule = configure_sparse_checkout(&clone_root, &revision.checkout, path)?;
+        ensure!(
+            options.include_submodules || !enters_submodule,
+            "selected path is a Git submodule; remove --no-submodules or select a path outside it"
+        );
     }
     git_status(
         &clone_root,
@@ -542,10 +546,11 @@ fn resolve_url_tail(
     )
 }
 
-fn configure_sparse_checkout(repository: &Path, revision: &str, subpath: &Path) -> Result<()> {
+fn configure_sparse_checkout(repository: &Path, revision: &str, subpath: &Path) -> Result<bool> {
     let slash_path = path_to_slash_string(subpath)?;
     let mut selector = PathBuf::new();
     let mut found = false;
+    let mut enters_submodule = false;
     let parts = slash_path.split('/').collect::<Vec<_>>();
     for (index, part) in parts.iter().enumerate() {
         selector.push(part);
@@ -554,6 +559,7 @@ fn configure_sparse_checkout(repository: &Path, revision: &str, subpath: &Path) 
             match kind.as_str() {
                 "commit" | "tree" => {
                     found = true;
+                    enters_submodule = kind == "commit";
                     if kind == "commit" || index + 1 == parts.len() {
                         break;
                     }
@@ -608,7 +614,7 @@ fn configure_sparse_checkout(repository: &Path, revision: &str, subpath: &Path) 
             "configure sparse checkout",
         )?;
     }
-    Ok(())
+    Ok(enters_submodule)
 }
 
 fn resolve_subpath(root: &Path, subpath: Option<&Path>) -> Result<PathBuf> {
