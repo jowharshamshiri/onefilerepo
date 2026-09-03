@@ -15,7 +15,7 @@ before output so concurrency never changes the digest.
 
 Requirements:
 
-- Rust 1.85 or newer
+- Rust 1.88 or newer
 - Git
 - [GitHub CLI](https://cli.github.com/) for GitHub sources, authenticated with
   `gh auth login`

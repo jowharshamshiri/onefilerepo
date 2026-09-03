@@ -2,13 +2,14 @@
 name = "onefilerepo"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "A fast, local-first CLI that turns Git repositories into LLM-ready text digests"
 license = "MIT"
 repository = "https://github.com/jowharshamshiri/onefilerepo"
 readme = "README.md"
 keywords = ["git", "github", "llm", "cli", "digest"]
 categories = ["command-line-utilities", "development-tools"]
+resolver = "3"
 
 [dependencies]
 anyhow = "1.0"
