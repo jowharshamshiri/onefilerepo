@@ -52,7 +52,7 @@ pub fn ingest(options: &IngestOptions) -> Result<Digest> {
 }
 
 fn ingest_prepared(options: &IngestOptions, prepared: &PreparedSource) -> Result<Digest> {
-    let scanned = scan(&ScanConfig {
+    let mut scanned = scan(&ScanConfig {
         root: prepared.scan_root.clone(),
         include_patterns: options.include_patterns.clone(),
         exclude_patterns: options.exclude_patterns.clone(),
@@ -66,6 +66,7 @@ fn ingest_prepared(options: &IngestOptions, prepared: &PreparedSource) -> Result
         output_path: options.output_path.clone(),
     })
     .with_context(|| format!("failed to scan {}", prepared.scan_root.display()))?;
+    scanned.root_name.clone_from(&prepared.metadata.label);
 
     Digest::new(prepared.metadata.clone(), scanned)
 }

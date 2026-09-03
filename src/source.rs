@@ -193,9 +193,12 @@ fn prepare_remote(spec: RemoteSpec, options: &PrepareOptions) -> Result<Prepared
         resolve_url_tail(&clone_root, &spec.url_tail, github_auth)?
     };
 
-    let selected_subpath = options.subpath.clone().or(url_subpath);
-    if let Some(path) = selected_subpath.as_deref() {
+    let requested_subpath = options.subpath.clone().or(url_subpath);
+    if let Some(path) = requested_subpath.as_deref() {
         validate_relative_path(path)?;
+    }
+    let selected_subpath = requested_subpath.filter(|path| !selects_root(path));
+    if let Some(path) = selected_subpath.as_deref() {
         let enters_submodule = configure_sparse_checkout(&clone_root, &revision.checkout, path)?;
         ensure!(
             options.include_submodules || !enters_submodule,
@@ -258,10 +261,9 @@ fn prepare_remote(spec: RemoteSpec, options: &PrepareOptions) -> Result<Prepared
     }
 
     let commit = git_capture(&clone_root, ["rev-parse", "HEAD"])?;
-    let label = if scan_root.file_name().is_none() {
-        spec.repository_label.clone()
-    } else {
-        path_label(&scan_root)?
+    let label = match selected_subpath.as_deref() {
+        Some(_) => path_label(&scan_root)?,
+        None => repository_basename(&spec.repository_label)?,
     };
 
     Ok(PreparedSource {
@@ -674,6 +676,11 @@ fn validate_relative_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn selects_root(path: &Path) -> bool {
+    path.components()
+        .all(|component| component == Component::CurDir)
+}
+
 fn validate_revision(revision: Option<&str>) -> Result<()> {
     if let Some(revision) = revision {
         ensure!(!revision.is_empty(), "revision cannot be empty");
@@ -981,6 +988,15 @@ fn validate_repository_label(label: &str) -> Result<()> {
     Ok(())
 }
 
+fn repository_basename(label: &str) -> Result<String> {
+    let name = label
+        .rsplit('/')
+        .next()
+        .context("remote repository has no display name")?;
+    ensure!(!name.is_empty(), "remote repository has no display name");
+    Ok(name.to_owned())
+}
+
 fn relative_display(root: &Path, selected: &Path) -> Result<Option<String>> {
     let relative = selected
         .strip_prefix(root)
@@ -1093,6 +1109,14 @@ mod tests {
         assert!(!looks_like_commit("deadbee"));
         assert!(!looks_like_commit("release-2026"));
         assert!(!looks_like_commit("abc"));
+    }
+
+    #[test]
+    fn recognizes_explicit_root_subpaths() {
+        assert!(selects_root(Path::new(".")));
+        assert!(selects_root(Path::new("./.")));
+        assert!(!selects_root(Path::new("src")));
+        assert_eq!(repository_basename("owner/widgets").unwrap(), "widgets");
     }
 
     #[test]
