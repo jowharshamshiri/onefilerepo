@@ -248,17 +248,7 @@ fn prepare_remote(spec: RemoteSpec, options: &PrepareOptions) -> Result<Prepared
     }
 
     let scan_root = resolve_subpath(&clone_root, selected_subpath.as_deref())?;
-    if spec.selection_kind == Some(SelectionKind::Blob) {
-        ensure!(
-            scan_root.is_file(),
-            "the /blob/ URL does not identify a file"
-        );
-    } else if spec.selection_kind == Some(SelectionKind::Tree) {
-        ensure!(
-            scan_root.is_dir(),
-            "the /tree/ URL does not identify a directory"
-        );
-    }
+    validate_selection_kind(&scan_root, spec.selection_kind)?;
 
     let commit = git_capture(&clone_root, ["rev-parse", "HEAD"])?;
     let label = match selected_subpath.as_deref() {
@@ -654,6 +644,27 @@ fn resolve_subpath(root: &Path, subpath: Option<&Path>) -> Result<PathBuf> {
         .file_name()
         .context("selected path has no final component")?;
     Ok(resolved_parent.join(name))
+}
+
+fn validate_selection_kind(path: &Path, selection_kind: Option<SelectionKind>) -> Result<()> {
+    let Some(selection_kind) = selection_kind else {
+        return Ok(());
+    };
+    let file_type = path
+        .symlink_metadata()
+        .with_context(|| format!("failed to inspect selected path {}", path.display()))?
+        .file_type();
+    match selection_kind {
+        SelectionKind::Blob => ensure!(
+            file_type.is_file() || file_type.is_symlink(),
+            "the /blob/ URL does not identify a file"
+        ),
+        SelectionKind::Tree => ensure!(
+            file_type.is_dir(),
+            "the /tree/ URL does not identify a directory"
+        ),
+    }
+    Ok(())
 }
 
 fn validate_relative_path(path: &Path) -> Result<()> {
@@ -1117,6 +1128,35 @@ mod tests {
         assert!(selects_root(Path::new("./.")));
         assert!(!selects_root(Path::new("src")));
         assert_eq!(repository_basename("owner/widgets").unwrap(), "widgets");
+    }
+
+    #[test]
+    fn url_selection_kinds_distinguish_regular_files_and_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("file.txt");
+        let child = directory.path().join("child");
+        fs::write(&file, "content").unwrap();
+        fs::create_dir(&child).unwrap();
+
+        assert!(validate_selection_kind(&file, Some(SelectionKind::Blob)).is_ok());
+        assert!(validate_selection_kind(&file, Some(SelectionKind::Tree)).is_err());
+        assert!(validate_selection_kind(&child, Some(SelectionKind::Tree)).is_ok());
+        assert!(validate_selection_kind(&child, Some(SelectionKind::Blob)).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_symlinks_remain_blob_selections() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        let link = directory.path().join("link");
+        fs::create_dir(&target).unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(validate_selection_kind(&link, Some(SelectionKind::Blob)).is_ok());
+        assert!(validate_selection_kind(&link, Some(SelectionKind::Tree)).is_err());
     }
 
     #[test]
