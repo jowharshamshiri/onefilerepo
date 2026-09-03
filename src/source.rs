@@ -487,16 +487,12 @@ fn resolve_revision(
     github_auth: bool,
 ) -> Result<ResolvedRevision> {
     if let Some(requested) = requested {
-        let candidates = if requested.starts_with("refs/") {
-            vec![requested.to_owned()]
-        } else {
-            vec![
-                format!("refs/heads/{requested}"),
-                format!("refs/remotes/origin/{requested}"),
-                format!("refs/tags/{requested}"),
-                requested.to_owned(),
-            ]
-        };
+        let candidates = vec![
+            format!("refs/heads/{requested}"),
+            format!("refs/remotes/origin/{requested}"),
+            format!("refs/tags/{requested}"),
+            requested.to_owned(),
+        ];
         for candidate in candidates {
             if let Some(commit) = try_resolve_commit(repository, &candidate)? {
                 return Ok(ResolvedRevision {
@@ -738,6 +734,24 @@ fn validate_revision(revision: Option<&str>) -> Result<()> {
             !revision.chars().any(char::is_control),
             "revision cannot contain control characters"
         );
+        if !looks_like_commit(revision) {
+            ensure!(
+                !revision.starts_with("refs/"),
+                "revision must be a branch name, tag name, or full commit ID, not a fully qualified ref"
+            );
+            let qualified = format!("refs/heads/{revision}");
+            let status = Command::new("git")
+                .args(["check-ref-format", &qualified])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .context("failed to execute `git`; install Git and make sure it is on PATH")?;
+            ensure!(
+                status.success(),
+                "revision is not a valid branch or tag name: {revision:?}"
+            );
+        }
     }
     Ok(())
 }
@@ -1232,6 +1246,9 @@ mod tests {
         assert!(parse_remote("https://github.com/acme/widgets/issues/1").is_err());
         assert!(validate_relative_path(Path::new("../secret")).is_err());
         assert!(validate_revision(Some("--upload-pack=evil")).is_err());
+        assert!(validate_revision(Some("feature/api")).is_ok());
+        assert!(validate_revision(Some("release~1")).is_err());
+        assert!(validate_revision(Some("refs/heads/main")).is_err());
         assert!(repository_name_from_remote("https://[invalid").is_err());
         assert!(repository_name_from_remote("https://host/owner/%0Arepo").is_err());
         assert!(parse_remote("user@:owner/repository.git").is_err());
