@@ -1,0 +1,4 @@
+/target/
+/digest.txt
+*.tmp
+.DS_Store
